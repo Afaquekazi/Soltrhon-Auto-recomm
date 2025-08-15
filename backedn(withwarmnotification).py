@@ -3362,6 +3362,94 @@ def analyze_context():
             'details': str(e)
         }), 500
 
+@app.route('/synthesize-conversation', methods=['POST'])
+def synthesize_conversation():
+    """Synthesize multiple conversation inputs into a better prompt"""
+    try:
+        # ADD CREDIT CHECK
+        credit_result = optional_credit_check('smart_enhancements')
+        if not credit_result['success']:
+            return jsonify({
+                'error': credit_result['message'],
+                'credits_required': get_feature_credits('smart_enhancements')
+            }), 402
+
+        data = request.get_json()
+        inputs = data.get('inputs', [])
+        platform = data.get('platform', 'unknown')
+        session_id = data.get('sessionId', '')
+
+        if not inputs or len(inputs) < 2:
+            return jsonify({'error': 'At least 2 inputs required for synthesis'}), 400
+
+        print(f"🔄 Synthesizing {len(inputs)} inputs for session: {session_id}")
+
+        # Build synthesis prompt
+        input_texts = [inp.get('text', '') for inp in inputs]
+        conversation_flow = '\n'.join([f"Input {i+1}: {text}" for i, text in enumerate(input_texts)])
+
+        synthesis_prompt = f"""You are an expert prompt engineer. The user has been refining their request across multiple inputs. Help them by creating ONE optimized prompt that combines all their requirements.
+
+User's conversation flow:
+{conversation_flow}
+
+Your task:
+1. Analyze what the user is trying to achieve
+2. Identify all the modifications and additions they've requested
+3. Create ONE comprehensive prompt that incorporates everything
+4. Make it clear, specific, and actionable
+
+Format your response as a single, well-structured prompt that the user can copy and use directly with an AI assistant.
+
+Guidelines:
+- Start with the core request from Input 1
+- Incorporate all modifications from subsequent inputs
+- Make it flow naturally as one cohesive prompt
+- Be specific about requirements, tone, length, and format
+- Don't explain what you're doing - just provide the optimized prompt
+
+Optimized prompt:"""
+
+        response = client.chat.completions.create(
+            model="chatgpt-4o-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert prompt engineer. Create optimized, comprehensive prompts that combine multiple user requests into one clear, actionable instruction."
+                },
+                {
+                    "role": "user",
+                    "content": synthesis_prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=800
+        )
+
+        synthesized_prompt = response.choices[0].message.content.strip()
+
+        result = {
+            'success': True,
+            'synthesized_prompt': synthesized_prompt,
+            'input_count': len(inputs),
+            'session_id': session_id,
+            'platform': platform
+        }
+
+        if credit_result.get('credits_used'):
+            result['credits_used'] = credit_result['credits_used']
+            result['credits_remaining'] = credit_result.get('remaining')
+
+        print(f"✅ Synthesis complete for session: {session_id}")
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Synthesis error: {e}")
+        return jsonify({
+            'error': 'Failed to synthesize conversation',
+            'details': str(e)
+        }), 500
+
 @app.route('/resend-verification', methods=['POST'])
 def resend_verification():
     """Resend verification email"""
