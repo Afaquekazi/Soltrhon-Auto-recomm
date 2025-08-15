@@ -14,6 +14,10 @@ let pageCredits = null;
 let isAutoModeActive = false;
 let hasProcessedFirstInput = false;
 let autoModeStartTime = null;
+// 🆕 CONVERSATION MEMORY VARIABLES
+let conversationMemory = null;
+let currentSessionId = null;
+let lastProcessedUrl = null;
 
 // ✨ Double-click animation function
 function triggerDoubleClickAnimation() {
@@ -28,6 +32,162 @@ function triggerDoubleClickAnimation() {
     setTimeout(() => {
         solthronButton.classList.remove('double-click-activated');
     }, 600);
+}
+
+// 🆕 SESSION MANAGEMENT FUNCTIONS
+function getCurrentSessionId() {
+    const platform = detectAIPlatform();
+    const url = window.location.href;
+    
+    if (platform === 'chatgpt') {
+        const match = url.match(/\/c\/([a-zA-Z0-9-]+)/);
+        return match ? `chatgpt_${match[1]}` : `chatgpt_${Date.now()}`;
+    } else if (platform === 'claude') {
+        const match = url.match(/\/chat\/([a-zA-Z0-9-]+)/);
+        return match ? `claude_${match[1]}` : `claude_${Date.now()}`;
+    } else if (platform === 'gemini') {
+        const match = url.match(/\/app\/([a-zA-Z0-9-]+)/);
+        return match ? `gemini_${match[1]}` : `gemini_${Date.now()}`;
+    }
+    
+    return `${platform}_${Date.now()}`;
+}
+
+function initializeConversationMemory() {
+    const sessionId = getCurrentSessionId();
+    
+    if (currentSessionId !== sessionId) {
+        console.log('🆕 New session detected:', sessionId);
+        currentSessionId = sessionId;
+        conversationMemory = {
+            sessionId: sessionId,
+            platform: detectAIPlatform(),
+            startTime: Date.now(),
+            inputs: [],
+            consolidatedContext: '',
+            interventionCount: 0
+        };
+        lastProcessedUrl = window.location.href;
+    }
+}
+
+function checkSessionChange() {
+    const currentUrl = window.location.href;
+    if (lastProcessedUrl !== currentUrl) {
+        console.log('🔄 URL changed, checking for new session');
+        initializeConversationMemory();
+    }
+}
+
+// 🆕 INTERVENTION POPUP FUNCTIONS
+function showInterventionPopup(consolidatedContext) {
+    const button = shadowRoot.querySelector('.solthron-button');
+    
+    const existingPopup = button.querySelector('.intervention-popup');
+    if (existingPopup) {
+        existingPopup.remove();
+    }
+    
+    const popup = document.createElement('div');
+    popup.className = 'intervention-popup';
+    popup.style.cssText = `
+        position: absolute;
+        bottom: 55px;
+        right: -20px;
+        background: #2c2c2c;
+        color: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        width: 280px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,0,0.3);
+        z-index: 10003;
+        animation: interventionSlide 0.3s ease-out;
+    `;
+    
+    popup.innerHTML = `
+        <div style="margin-bottom: 8px; line-height: 1.4;">
+            I see you're refining your request. Let me craft a better prompt combining everything!
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+            <button class="intervention-no" style="
+                background: none;
+                border: 1px solid rgba(255,255,255,0.3);
+                color: white;
+                padding: 4px 12px;
+                border-radius: 4px;
+                font-size: 11px;
+                cursor: pointer;
+            ">No</button>
+            <button class="intervention-yes" style="
+                background: #ffff00;
+                border: none;
+                color: black;
+                padding: 4px 12px;
+                border-radius: 4px;
+                font-size: 11px;
+                cursor: pointer;
+                font-weight: 500;
+            ">Yes</button>
+        </div>
+    `;
+    
+    popup.querySelector('.intervention-no').addEventListener('click', () => {
+        popup.remove();
+    });
+    
+    popup.querySelector('.intervention-yes').addEventListener('click', async () => {
+        popup.remove();
+        await handleInterventionAccepted();
+    });
+    
+    button.appendChild(popup);
+    
+    setTimeout(() => {
+        if (popup.parentNode) {
+            popup.remove();
+        }
+    }, 10000);
+}
+
+async function handleInterventionAccepted() {
+    try {
+        showShimmerLoading('Crafting better prompt...');
+        
+        const buttonRect = button.getBoundingClientRect();
+        solthronContainer.style.display = 'block';
+        solthronContainer.style.pointerEvents = 'auto';
+        positionContainer(buttonRect);
+        
+        const response = await fetch('https://afaque.pythonanywhere.com/synthesize-conversation', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${await BackendAuth.getAuthToken()}`
+            },
+            body: JSON.stringify({
+                inputs: conversationMemory.inputs,
+                platform: conversationMemory.platform,
+                sessionId: conversationMemory.sessionId
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.synthesized_prompt) {
+                updateOutput(data.synthesized_prompt);
+                conversationMemory.interventionCount++;
+            } else {
+                showError('Failed to generate synthesized prompt');
+            }
+        } else {
+            showError('Network error while synthesizing prompt');
+        }
+    } catch (error) {
+        console.error('Intervention error:', error);
+        showError('Error generating better prompt');
+    }
 }
 
 // Loading Bar Helper Functions
@@ -83,6 +243,10 @@ function showAutoModePopup(message, duration = 3000) {
                 0%, 100% { opacity: 1; }
                 50% { opacity: 0.5; }
             }
+            @keyframes interventionSlide {
+                from { transform: translateX(20px); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }    
         `;
         shadowRoot.appendChild(style);
     }
@@ -530,12 +694,11 @@ function detectChatGPTInput() {
     console.log('🎯 Setting up ChatGPT input detection...');
     
     let hasSetupListeners = false;
-    let lastInputText = ''; // Store the last typed text
+    let lastInputText = '';
     
     const observer = new MutationObserver((mutations) => {
-        if (hasSetupListeners || hasProcessedFirstInput) return;
+        if (hasSetupListeners) return;
         
-        // More comprehensive ChatGPT selectors
         const sendButton = document.querySelector([
             '[data-testid="send-button"]',
             'button[aria-label*="Send"]', 
@@ -554,86 +717,57 @@ function detectChatGPTInput() {
         ].join(', '));
         
         if (sendButton && inputElement) {
-            console.log('✅ Found ChatGPT elements:');
-            console.log('📤 Send button:', sendButton.outerHTML.substring(0, 100));
-            console.log('📝 Input element:', inputElement.outerHTML.substring(0, 100));
+            console.log('✅ Found ChatGPT elements');
             hasSetupListeners = true;
             
-            // CAPTURE TEXT AS USER TYPES (before it gets cleared)
             inputElement.addEventListener('input', (e) => {
                 const currentText = getInputText(inputElement);
                 if (currentText && currentText.length > 5) {
                     lastInputText = currentText;
-                    console.log('📝 Storing input text:', lastInputText.substring(0, 50) + '...');
                 }
             });
             
-            // Alternative: capture on paste events
             inputElement.addEventListener('paste', (e) => {
                 setTimeout(() => {
                     const pastedText = getInputText(inputElement);
                     if (pastedText && pastedText.length > 5) {
                         lastInputText = pastedText;
-                        console.log('📋 Storing pasted text:', lastInputText.substring(0, 50) + '...');
                     }
                 }, 100);
             });
             
-            // CLICK DETECTION - use stored text
             sendButton.addEventListener('click', (e) => {
-                console.log('🖱️ SEND BUTTON CLICKED!');
-                console.log('📄 Last stored text:', lastInputText);
-                console.log('📏 Text length:', lastInputText ? lastInputText.length : 0);
-                
                 if (lastInputText && lastInputText.length > 5) {
-                    console.log('🎯 TRIGGERING handleFirstInput with stored text:', lastInputText.substring(0, 50) + '...');
+                    console.log('🎯 TRIGGERING handleFirstInput with stored text');
                     handleFirstInput(lastInputText, 'chatgpt');
-                    lastInputText = ''; // Clear after using
-                } else {
-                    console.log('❌ No stored text, not triggering');
+                    lastInputText = '';
                 }
             });
             
-            // ENTER KEY DETECTION - use stored text  
             inputElement.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
-                    console.log('⌨️ ENTER KEY PRESSED!');
-                    console.log('📄 Last stored text:', lastInputText);
-                    console.log('📏 Text length:', lastInputText ? lastInputText.length : 0);
-                    
                     if (lastInputText && lastInputText.length > 5) {
-                        console.log('🎯 TRIGGERING handleFirstInput with stored text:', lastInputText.substring(0, 50) + '...');
+                        console.log('🎯 TRIGGERING handleFirstInput with stored text');
                         handleFirstInput(lastInputText, 'chatgpt');
-                        lastInputText = ''; // Clear after using
-                    } else {
-                        console.log('❌ No stored text, not triggering');
+                        lastInputText = '';
                     }
                 }
             });
-            
-        } else {
-            console.log('❌ Could not find ChatGPT elements');
-            console.log('📤 Send button found:', !!sendButton);
-            console.log('📝 Input element found:', !!inputElement);
         }
     });
     
     observer.observe(document.body, { childList: true, subtree: true });
-    
-    // Keep observer running longer for debugging
-    setTimeout(() => {
-        console.log('⏰ Observer timeout - disconnecting');
-        observer.disconnect();
-    }, 60000);
+    setTimeout(() => observer.disconnect(), 60000);
 }
 
 function detectClaudeInput() {
     console.log('🎯 Setting up Claude input detection...');
     
     let hasSetupListeners = false;
+    let lastInputText = '';
     
     const observer = new MutationObserver((mutations) => {
-        if (hasSetupListeners || hasProcessedFirstInput) return;
+        if (hasSetupListeners) return;
         
         const sendButton = document.querySelector('button[aria-label*="Send"], [data-testid*="send"], button[type="submit"]');
         const inputElement = document.querySelector('div[contenteditable="true"], textarea, div[role="textbox"]');
@@ -642,20 +776,25 @@ function detectClaudeInput() {
             console.log('✅ Found Claude elements, setting up listeners');
             hasSetupListeners = true;
             
+            inputElement.addEventListener('input', (e) => {
+                const currentText = getInputText(inputElement);
+                if (currentText && currentText.length > 5) {
+                    lastInputText = currentText;
+                }
+            });
+            
             sendButton.addEventListener('click', () => {
-                const text = getInputText(inputElement);
-                if (text && text.length > 5) {
-                    console.log('📝 Claude click detected:', text.substring(0, 30) + '...');
-                    handleFirstInput(text, 'claude');
+                if (lastInputText && lastInputText.length > 5) {
+                    handleFirstInput(lastInputText, 'claude');
+                    lastInputText = '';
                 }
             });
             
             inputElement.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
-                    const text = getInputText(inputElement);
-                    if (text && text.length > 5) {
-                        console.log('⌨️ Claude enter detected:', text.substring(0, 30) + '...');
-                        handleFirstInput(text, 'claude');
+                    if (lastInputText && lastInputText.length > 5) {
+                        handleFirstInput(lastInputText, 'claude');
+                        lastInputText = '';
                     }
                 }
             });
@@ -670,9 +809,10 @@ function detectGeminiInput() {
     console.log('🎯 Setting up Gemini input detection...');
     
     let hasSetupListeners = false;
+    let lastInputText = '';
     
     const observer = new MutationObserver((mutations) => {
-        if (hasSetupListeners || hasProcessedFirstInput) return;
+        if (hasSetupListeners) return;
         
         const sendButton = document.querySelector('button[aria-label*="Send"], [title*="Send"], button[type="submit"]');
         const inputElement = document.querySelector('textarea, div[contenteditable="true"], div[role="textbox"]');
@@ -681,20 +821,25 @@ function detectGeminiInput() {
             console.log('✅ Found Gemini elements, setting up listeners');
             hasSetupListeners = true;
             
+            inputElement.addEventListener('input', (e) => {
+                const currentText = getInputText(inputElement);
+                if (currentText && currentText.length > 5) {
+                    lastInputText = currentText;
+                }
+            });
+            
             sendButton.addEventListener('click', () => {
-                const text = getInputText(inputElement);
-                if (text && text.length > 5) {
-                    console.log('📝 Gemini click detected:', text.substring(0, 30) + '...');
-                    handleFirstInput(text, 'gemini');
+                if (lastInputText && lastInputText.length > 5) {
+                    handleFirstInput(lastInputText, 'gemini');
+                    lastInputText = '';
                 }
             });
             
             inputElement.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
-                    const text = getInputText(inputElement);
-                    if (text && text.length > 5) {
-                        console.log('⌨️ Gemini enter detected:', text.substring(0, 30) + '...');
-                        handleFirstInput(text, 'gemini');
+                    if (lastInputText && lastInputText.length > 5) {
+                        handleFirstInput(lastInputText, 'gemini');
+                        lastInputText = '';
                     }
                 }
             });
@@ -704,7 +849,6 @@ function detectGeminiInput() {
     observer.observe(document.body, { childList: true, subtree: true });
     setTimeout(() => observer.disconnect(), 30000);
 }
-
 // Helper function to safely extract text from input elements
 // Helper function to safely extract text from input elements
 function getInputText(element) {
@@ -783,67 +927,83 @@ function detectGenericInput() {
 }
 
 async function handleFirstInput(inputText, platform) {
-    if (hasProcessedFirstInput || !isAutoModeActive) {
-        console.log('❌ Skipping - already processed or auto mode inactive');
-        return;
-    }
+    // Check for session changes first
+    checkSessionChange();
+    initializeConversationMemory();
     
-    // Extra safety check
     if (!inputText || typeof inputText !== 'string' || inputText.trim().length < 5) {
         console.log('❌ Invalid input text, skipping');
         return;
     }
     
-    hasProcessedFirstInput = true;
-    console.log('🎯 First input detected:', inputText.substring(0, 50) + '...');
-    console.log('🔍 Platform:', platform);
+    // 🆕 CONVERSATION MEMORY LOGIC
+    const inputData = {
+        text: inputText.trim(),
+        timestamp: Date.now(),
+        analyzedContext: null
+    };
     
-    console.log('📢 Showing "Analyzing..." popup');
-    showAutoModePopup('Analyzing your input...', 2000);
+    conversationMemory.inputs.push(inputData);
+    console.log(`📝 Input #${conversationMemory.inputs.length} saved:`, inputText.substring(0, 50) + '...');
     
-    try {
-        console.log('🔄 Getting auth token...');
-        const authToken = await BackendAuth.getAuthToken();
-        console.log('🔑 Auth token:', authToken ? 'Found' : 'Not found');
+    // First input - show warm notification (existing logic)
+    if (conversationMemory.inputs.length === 1 && !hasProcessedFirstInput) {
+        hasProcessedFirstInput = true;
+        console.log('🎯 First input detected:', inputText.substring(0, 50) + '...');
+        console.log('🔍 Platform:', platform);
         
-        console.log('📡 Making API request to analyze-context...');
-        const response = await fetch('https://afaque.pythonanywhere.com/analyze-context', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${authToken}`
-            },
-            body: JSON.stringify({
-                input_text: inputText,
-                platform: platform,
-                timestamp: Date.now()
-            })
-        });
+        console.log('📢 Showing "Analyzing..." popup');
+        showAutoModePopup('Analyzing your input...', 2000);
         
-        console.log('📊 API Response status:', response.status);
-        console.log('📊 API Response ok:', response.ok);
-        
-        if (response.ok) {
-            const data = await response.json();
-            console.log('✅ API Response data:', data);
+        try {
+            const authToken = await BackendAuth.getAuthToken();
             
-            if (data.success && data.warm_message) {
-                console.log('📢 Showing warm message:', data.warm_message);
-                showAutoModePopup(data.warm_message, 5000);
-            } else {
-                console.log('❌ API response missing success or warm_message');
-                showAutoModePopup('Auto mode active - ready to help!', 3000);
+            const response = await fetch('https://afaque.pythonanywhere.com/analyze-context', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${authToken}`
+                },
+                body: JSON.stringify({
+                    input_text: inputText,
+                    platform: platform,
+                    timestamp: Date.now()
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.warm_message) {
+                    showAutoModePopup(data.warm_message, 5000);
+                    // Store analyzed context
+                    inputData.analyzedContext = {
+                        topic: data.detected_topic || 'general',
+                        intent: data.detected_context || 'general',
+                        confidence: data.confidence || 0.5
+                    };
+                }
             }
-        } else {
-            console.log('❌ API request failed:', response.status, response.statusText);
-            const errorText = await response.text();
-            console.log('❌ Error response:', errorText);
+        } catch (error) {
+            console.error('Auto mode analysis error:', error);
             showAutoModePopup('Auto mode active - watching your conversation!', 3000);
         }
-    } catch (error) {
-        console.error('💥 Auto mode analysis error:', error);
-        console.error('💥 Error details:', error.message);
-        showAutoModePopup('Auto mode active - watching your conversation!', 3000);
+    }
+    
+    // 🆕 INTERVENTION TRIGGER LOGIC
+    // Trigger after every 2 inputs (starting from input 2)
+    if (conversationMemory.inputs.length >= 2 && conversationMemory.inputs.length % 2 === 0) {
+        console.log(`🎯 Intervention trigger: ${conversationMemory.inputs.length} inputs detected`);
+        
+        // Build consolidated context
+        const contexts = conversationMemory.inputs
+            .map(input => input.text)
+            .join(' + ');
+        conversationMemory.consolidatedContext = contexts;
+        
+        // Show intervention popup
+        setTimeout(() => {
+            showInterventionPopup(conversationMemory.consolidatedContext);
+        }, 1000); // Small delay so user sees their message sent first
     }
 }
 
@@ -3646,3 +3806,4 @@ window.solthronDebug = {
 // ✅ INITIALIZE THE EXTENSION
 createUI();
 initializeProfileHandlers();
+initializeConversationMemory();
