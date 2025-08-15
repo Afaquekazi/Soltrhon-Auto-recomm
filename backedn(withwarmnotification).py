@@ -3388,34 +3388,59 @@ def synthesize_conversation():
         input_texts = [inp.get('text', '') for inp in inputs]
         conversation_flow = '\n'.join([f"Input {i+1}: {text}" for i, text in enumerate(input_texts)])
 
-        synthesis_prompt = f"""You are an expert prompt engineer. The user has been refining their request across multiple inputs. Help them by creating ONE optimized prompt that combines all their requirements.
+        synthesis_prompt = f"""You are an expert prompt engineer creating "practical magic" - prompts that give users helpful details they wouldn't think of, without overwhelming them.
 
 User's conversation flow:
 {conversation_flow}
 
-Your task:
-1. Analyze what the user is trying to achieve
-2. Identify all the modifications and additions they've requested
-3. Create ONE comprehensive prompt that incorporates everything
-4. Make it clear, specific, and actionable
+ANALYSIS FRAMEWORK:
+1. What type of work is in progress? (writing, coding, planning, etc.)
+2. What's the user's apparent skill level? (beginner asking for simple things vs advanced requests)
+3. What practical improvements would genuinely help but they wouldn't think to ask for?
 
-Format your response as a single, well-structured prompt that the user can copy and use directly with an AI assistant.
+PRACTICAL MAGIC PRINCIPLES:
+✅ Add helpful specifics they wouldn't consider
+✅ Include real-world examples and use cases
+✅ Suggest common pitfalls to avoid
+✅ Add user-focused improvements that matter
+✅ Keep it practical and actionable
+❌ No overwhelming technical jargon
+❌ No over-engineering or complex frameworks
+❌ Don't change their core intent
 
-Guidelines:
-- Start with the core request from Input 1
-- Incorporate all modifications from subsequent inputs
-- Make it flow naturally as one cohesive prompt
-- Be specific about requirements, tone, length, and format
-- Don't explain what you're doing - just provide the optimized prompt
+EXAMPLES BY DOMAIN:
 
-Optimized prompt:"""
+WRITING (Blog/Content):
+❌ Basic: "Make the blog more engaging"
+❌ Overwhelming: "Implement AIDA framework with conversion funnels and behavioral psychology"
+✅ Practical Magic: "Add personal anecdotes, include specific examples readers can relate to, address common objections people have about this topic, and end with actionable next steps"
+
+CODING:
+❌ Basic: "Add error handling to the component"
+❌ Overwhelming: "Implement enterprise architecture with dependency injection and observer patterns"
+✅ Practical Magic: "Add helpful error messages users can understand, loading states so users know something's happening, and simple validation to prevent common mistakes"
+
+CREATIVE (Poems/Stories):
+❌ Basic: "Make the character description more detailed"
+❌ Overwhelming: "Apply literary theory with metaphysical conceits and postmodern narrative techniques"
+✅ Practical Magic: "Add sensory details like sounds and textures, include emotional reactions that make readers connect with the character, and create a vivid setting that feels real"
+
+BUSINESS:
+❌ Basic: "Improve the marketing plan"
+❌ Overwhelming: "Create omnichannel attribution models with predictive analytics and behavioral segmentation"
+✅ Practical Magic: "Include specific budget numbers, realistic timelines with milestones, ways to measure if it's working, and backup plans if the first approach doesn't work"
+
+YOUR TASK:
+Create ONE continuation prompt that enhances existing work with practical details that create an "aha moment" - things that are genuinely helpful but the user wouldn't think to ask for.
+
+Enhanced continuation prompt:"""
 
         response = client.chat.completions.create(
             model="chatgpt-4o-latest",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an expert prompt engineer. Create optimized, comprehensive prompts that combine multiple user requests into one clear, actionable instruction."
+                    "content": "You are an expert at creating 'practical magic' prompts - enhancements that give users helpful details they wouldn't think of, without overwhelming them. Focus on genuinely useful improvements that create 'aha moments'."
                 },
                 {
                     "role": "user",
@@ -3427,6 +3452,13 @@ Optimized prompt:"""
         )
 
         synthesized_prompt = response.choices[0].message.content.strip()
+
+        # Clean up the response - remove any meta text
+        if synthesized_prompt.startswith("Optimized continuation prompt:"):
+            synthesized_prompt = synthesized_prompt.replace("Optimized continuation prompt:", "").strip()
+        if synthesized_prompt.startswith("Here's"):
+            lines = synthesized_prompt.split('\n')
+            synthesized_prompt = '\n'.join(lines[1:]).strip()
 
         result = {
             'success': True,
@@ -3447,6 +3479,139 @@ Optimized prompt:"""
         print(f"❌ Synthesis error: {e}")
         return jsonify({
             'error': 'Failed to synthesize conversation',
+            'details': str(e)
+        }), 500
+
+@app.route('/analyze-intervention', methods=['POST'])
+def analyze_intervention():
+    """Analyze conversation progression for personalized intervention message"""
+    try:
+        # ADD CREDIT CHECK (same as auto suggestion - 3 credits)
+        credit_result = optional_credit_check('auto_suggestion')
+        if not credit_result['success']:
+            return jsonify({
+                'error': credit_result['message'],
+                'credits_required': get_feature_credits('auto_suggestion')
+            }), 402
+
+        data = request.get_json()
+        inputs = data.get('inputs', [])
+        platform = data.get('platform', 'unknown')
+
+        if not inputs or len(inputs) < 2:
+            return jsonify({'error': 'At least 2 inputs required for intervention analysis'}), 400
+
+        print(f"🔍 Analyzing intervention for {len(inputs)} inputs...")
+
+        # Get the last 2-3 inputs for better context
+        recent_inputs = inputs[-3:] if len(inputs) >= 3 else inputs[-2:]
+        input_1 = recent_inputs[0].get('text', '')
+        input_2 = recent_inputs[1].get('text', '')
+        input_3 = recent_inputs[2].get('text', '') if len(recent_inputs) >= 3 else ''
+
+        analysis_prompt = f"""Analyze this conversation progression to create a personalized intervention message.
+
+Input 1 (Original): "{input_1}"
+Input 2 (Modification): "{input_2}"
+{f'Input 3 (Additional): "{input_3}"' if input_3 else ''}
+
+The user made an original request, then tried to refine/modify it{' multiple times' if input_3 else ''}. I need to show them a helpful popup.
+
+Create a short, personalized message (max 12 words) that:
+1. Shows I understand their original intent AND their modification
+2. Offers to help them craft a better prompt
+3. Uses the specific topics/concepts they mentioned
+4. Sounds encouraging and helpful
+
+Examples of good intervention messages:
+- "I see you want a shorter crypto blog. Let me help!"
+- "Marketing strategy with social media focus - I'll craft it better!"
+- "React component but simpler - let me optimize that prompt!"
+- "Professional email that's more casual - I can combine these!"
+- "Crypto blog that's shorter + includes dogecoin - let me merge these!"
+- "Marketing plan with budget constraints + social focus - I'll optimize!"
+
+JSON Format:
+{{
+    "intervention_message": "personalized message here",
+    "detected_intent": "what they're trying to achieve",
+    "detected_modification": "how they're trying to change it",
+    "confidence": 0.0-1.0
+}}
+
+Keep the intervention_message under 12 words and make it specific to their actual requests."""
+
+        response = client.chat.completions.create(
+            model="chatgpt-4o-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an intelligent conversation assistant that creates personalized, encouraging intervention messages. Always respond with valid JSON only."
+                },
+                {
+                    "role": "user",
+                    "content": analysis_prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=300
+        )
+
+        ai_response = response.choices[0].message.content.strip()
+
+        # Clean and parse JSON response
+        if "```json" in ai_response:
+            ai_response = ai_response.split("```json")[1].split("```")[0]
+        elif "```" in ai_response:
+            ai_response = ai_response.split("```")[1].split("```")[0]
+
+        # Find JSON boundaries
+        start_idx = ai_response.find('{')
+        end_idx = ai_response.rfind('}') + 1
+
+        if start_idx != -1 and end_idx > start_idx:
+            json_str = ai_response[start_idx:end_idx]
+            analysis_data = json.loads(json_str)
+
+            result = {
+                'success': True,
+                'intervention_message': analysis_data.get('intervention_message', 'I can help craft a better prompt combining everything!'),
+                'detected_intent': analysis_data.get('detected_intent', 'general'),
+                'detected_modification': analysis_data.get('detected_modification', 'refinement'),
+                'confidence': float(analysis_data.get('confidence', 0.8)),
+                'platform': platform,
+                'input_count': len(inputs)
+            }
+
+            if credit_result.get('credits_used'):
+                result['credits_used'] = credit_result['credits_used']
+                result['credits_remaining'] = credit_result.get('remaining')
+
+            print(f"✅ Intervention analysis complete: {result['intervention_message']}")
+            return jsonify(result)
+
+        else:
+            # Fallback if JSON parsing fails
+            result = {
+                'success': True,
+                'intervention_message': 'I can help craft a better prompt combining everything!',
+                'detected_intent': 'general',
+                'detected_modification': 'refinement',
+                'confidence': 0.5,
+                'platform': platform,
+                'input_count': len(inputs)
+            }
+
+            if credit_result.get('credits_used'):
+                result['credits_used'] = credit_result['credits_used']
+                result['credits_remaining'] = credit_result.get('remaining')
+
+            return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Intervention analysis error: {e}")
+        return jsonify({
+            'error': 'Failed to analyze intervention',
             'details': str(e)
         }), 500
 
