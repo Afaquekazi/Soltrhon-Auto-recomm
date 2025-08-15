@@ -80,12 +80,44 @@ function checkSessionChange() {
 }
 
 // 🆕 INTERVENTION POPUP FUNCTIONS
-function showInterventionPopup(consolidatedContext) {
+async function showInterventionPopup(consolidatedContext) {
     const button = shadowRoot.querySelector('.solthron-button');
     
     const existingPopup = button.querySelector('.intervention-popup');
     if (existingPopup) {
         existingPopup.remove();
+    }
+    
+    // 🆕 GET PERSONALIZED MESSAGE FROM AI
+    let personalizedMessage = 'I can help craft a better prompt combining everything!';
+    
+    try {
+        console.log('🔍 Getting personalized intervention message...');
+        const authToken = await BackendAuth.getAuthToken();
+        
+        const response = await fetch('https://afaque.pythonanywhere.com/analyze-intervention', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                inputs: conversationMemory.inputs,
+                platform: conversationMemory.platform
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.intervention_message) {
+                personalizedMessage = data.intervention_message;
+                console.log('✅ Personalized message:', personalizedMessage);
+            }
+        } else {
+            console.log('❌ Failed to get personalized message, using fallback');
+        }
+    } catch (error) {
+        console.error('❌ Error getting personalized message:', error);
     }
     
     const popup = document.createElement('div');
@@ -108,7 +140,7 @@ function showInterventionPopup(consolidatedContext) {
     
     popup.innerHTML = `
         <div style="margin-bottom: 8px; line-height: 1.4;">
-            I see you're refining your request. Let me craft a better prompt combining everything!
+            ${personalizedMessage}
         </div>
         <div style="display: flex; gap: 8px; justify-content: flex-end;">
             <button class="intervention-no" style="
