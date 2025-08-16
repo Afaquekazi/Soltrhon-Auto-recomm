@@ -3404,6 +3404,9 @@ PRACTICAL MAGIC PRINCIPLES:
 ✅ Suggest common pitfalls to avoid
 ✅ Add user-focused improvements that matter
 ✅ Keep it practical and actionable
+✅ Create an OPTIMIZED PROMPT, not an answer
+✅ Refine their request to be more specific and effective
+✅ Help them ask better questions, don't provide solutions
 ❌ No overwhelming technical jargon
 ❌ No over-engineering or complex frameworks
 ❌ Don't change their core intent
@@ -3431,7 +3434,9 @@ BUSINESS:
 ✅ Practical Magic: "Include specific budget numbers, realistic timelines with milestones, ways to measure if it's working, and backup plans if the first approach doesn't work"
 
 YOUR TASK:
-Create ONE continuation prompt that enhances existing work with practical details that create an "aha moment" - things that are genuinely helpful but the user wouldn't think to ask for.
+Create ONE continuation prompt that enhances existing work with practical details that create an "aha moment" - things that are genuinely helpful but the user wouldn't think to ask for and just give the prompt as the output - dont ask a question - the prompt will be directly copy pasted by the user.
+
+Take their basic request and make it more detailed and effective while keeping the same intent, refer to the Practical magical example for the length of the prompt
 
 Enhanced continuation prompt:"""
 
@@ -3612,6 +3617,133 @@ Keep the intervention_message under 12 words and make it specific to their actua
         print(f"❌ Intervention analysis error: {e}")
         return jsonify({
             'error': 'Failed to analyze intervention',
+            'details': str(e)
+        }), 500
+
+@app.route('/analyze-motivation', methods=['POST'])
+def analyze_motivation():
+    """Generate personalized motivational message for 5th prompt"""
+    try:
+        # ADD CREDIT CHECK (same as auto suggestion - 3 credits)
+        credit_result = optional_credit_check('auto_suggestion')
+        if not credit_result['success']:
+            return jsonify({
+                'error': credit_result['message'],
+                'credits_required': get_feature_credits('auto_suggestion')
+            }), 402
+
+        data = request.get_json()
+        inputs = data.get('inputs', [])
+        platform = data.get('platform', 'unknown')
+
+        if not inputs or len(inputs) < 5:
+            return jsonify({'error': 'Need at least 5 inputs for motivational analysis'}), 400
+
+        print(f"💪 Analyzing motivation for {len(inputs)} inputs...")
+
+        # Get the user's journey context
+        input_texts = [inp.get('text', '') for inp in inputs]
+        conversation_context = ' | '.join(input_texts)
+
+        motivation_prompt = f"""You are an encouraging AI assistant analyzing a user's conversation journey to provide personalized motivation.
+
+User's conversation journey (5 prompts):
+{conversation_context}
+
+Create a short, personalized motivational message (max 15 words) that:
+1. Shows you understand their specific topic/project
+2. Acknowledges their progress and persistence
+3. Sounds genuinely encouraging and supportive
+4. References their actual work/topic specifically
+5. Feels personal and warm
+
+Examples of good motivational messages:
+- "Your marketing strategy is really taking shape - the research depth shows!"
+- "This React component is getting more sophisticated with each iteration!"
+- "Your crypto blog concept is becoming really compelling and unique!"
+- "The way you're refining this business plan shows real strategic thinking!"
+
+JSON Format:
+{{
+    "motivational_message": "personalized encouraging message here",
+    "detected_topic": "what they're working on",
+    "progress_observed": "what progress you noticed",
+    "confidence": 0.0-1.0
+}}
+
+Keep the motivational_message under 15 words and make it specific to their actual work."""
+
+        response = client.chat.completions.create(
+            model="chatgpt-4o-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a supportive AI coach that provides personalized encouragement. Always respond with valid JSON only."
+                },
+                {
+                    "role": "user",
+                    "content": motivation_prompt
+                }
+            ],
+            temperature=0.4,
+            max_tokens=300
+        )
+
+        ai_response = response.choices[0].message.content.strip()
+
+        # Clean and parse JSON response
+        if "```json" in ai_response:
+            ai_response = ai_response.split("```json")[1].split("```")[0]
+        elif "```" in ai_response:
+            ai_response = ai_response.split("```")[1].split("```")[0]
+
+        # Find JSON boundaries
+        start_idx = ai_response.find('{')
+        end_idx = ai_response.rfind('}') + 1
+
+        if start_idx != -1 and end_idx > start_idx:
+            json_str = ai_response[start_idx:end_idx]
+            analysis_data = json.loads(json_str)
+
+            result = {
+                'success': True,
+                'motivational_message': analysis_data.get('motivational_message', 'You\'re making excellent progress - keep going!'),
+                'detected_topic': analysis_data.get('detected_topic', 'your project'),
+                'progress_observed': analysis_data.get('progress_observed', 'steady improvement'),
+                'confidence': float(analysis_data.get('confidence', 0.8)),
+                'platform': platform,
+                'input_count': len(inputs)
+            }
+
+            if credit_result.get('credits_used'):
+                result['credits_used'] = credit_result['credits_used']
+                result['credits_remaining'] = credit_result.get('remaining')
+
+            print(f"✅ Motivational analysis complete: {result['motivational_message']}")
+            return jsonify(result)
+
+        else:
+            # Fallback if JSON parsing fails
+            result = {
+                'success': True,
+                'motivational_message': 'You\'re making excellent progress with your conversation!',
+                'detected_topic': 'your project',
+                'progress_observed': 'steady improvement',
+                'confidence': 0.5,
+                'platform': platform,
+                'input_count': len(inputs)
+            }
+
+            if credit_result.get('credits_used'):
+                result['credits_used'] = credit_result['credits_used']
+                result['credits_remaining'] = credit_result.get('remaining')
+
+            return jsonify(result)
+
+    except Exception as e:
+        print(f"❌ Motivational analysis error: {e}")
+        return jsonify({
+            'error': 'Failed to analyze motivation',
             'details': str(e)
         }), 500
 
