@@ -222,6 +222,44 @@ async function handleInterventionAccepted() {
     }
 }
 
+// 🆕 MOTIVATIONAL POPUP FUNCTION
+async function showMotivationalPopup() {
+    // 🆕 GET PERSONALIZED MOTIVATIONAL MESSAGE FROM AI
+    let motivationalMessage = 'You\'re making great progress with your conversation!';
+    
+    try {
+        console.log('💪 Getting personalized motivational message...');
+        const authToken = await BackendAuth.getAuthToken();
+        
+        const response = await fetch('https://afaque.pythonanywhere.com/analyze-motivation', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                inputs: conversationMemory.inputs,
+                platform: conversationMemory.platform
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.motivational_message) {
+                motivationalMessage = data.motivational_message;
+                console.log('✅ Personalized motivational message:', motivationalMessage);
+            }
+        } else {
+            console.log('❌ Failed to get personalized motivational message, using fallback');
+        }
+    } catch (error) {
+        console.error('❌ Error getting motivational message:', error);
+    }
+    
+    // Use the same showAutoModePopup function with longer duration
+    showAutoModePopup(motivationalMessage, 4000);
+}
+
 // Loading Bar Helper Functions
 function showShimmerLoading(message) {
     outputText.classList.remove('placeholder', 'error');
@@ -1021,10 +1059,11 @@ async function handleFirstInput(inputText, platform) {
         }
     }
     
-    // 🆕 INTERVENTION TRIGGER LOGIC
-    // Trigger after every 2 inputs (starting from input 2)
-    if (conversationMemory.inputs.length >= 2 && conversationMemory.inputs.length % 2 === 0) {
-        console.log(`🎯 Intervention trigger: ${conversationMemory.inputs.length} inputs detected`);
+// 🆕 NEW INTERVENTION STRATEGY
+    // Prompt 3 & 7: Refinement notifications
+    // Prompt 5: Motivational message
+    if (conversationMemory.inputs.length === 2 || conversationMemory.inputs.length === 6) {
+        console.log(`🎯 Prompt refinement trigger: ${conversationMemory.inputs.length} inputs detected`);
         
         // Build consolidated context
         const contexts = conversationMemory.inputs
@@ -1036,9 +1075,18 @@ async function handleFirstInput(inputText, platform) {
         setTimeout(() => {
             showInterventionPopup(conversationMemory.consolidatedContext);
         }, 1000); // Small delay so user sees their message sent first
+        
+    } else if (conversationMemory.inputs.length === 5) {
+        console.log(`💪 Motivational message trigger: ${conversationMemory.inputs.length} inputs detected`);
+        
+        // Show motivational popup
+        setTimeout(() => {
+            showMotivationalPopup();
+        }, 1000);
     }
 }
-
+    
+    
 // Test popup function
 window.testPopup = function() {
     console.log('🧪 Testing popup...');
