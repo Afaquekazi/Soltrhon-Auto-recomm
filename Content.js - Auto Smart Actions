@@ -24,7 +24,8 @@ let autoSmartActionsEnabled = true; // Always enabled
 let lastAIResponseTime = 0;
 let isProcessingAutoAction = false;
 let autoActionNotification = null;
-const AUTO_ACTION_COOLDOWN = 3000; // 3 seconds cooldown
+let autoActionLock = false; // NEW: Immediate synchronous lock
+const AUTO_ACTION_COOLDOWN = 5000; // Increased to 5 seconds cooldown
 
 // ✨ Double-click animation function
 function triggerDoubleClickAnimation() {
@@ -629,37 +630,71 @@ function initializeAutoSmartActions() {
 function monitorAIResponses(platform) {
     console.log(`🔍 Starting AI response monitoring for ${platform}`);
     
-    // Platform-specific AI response monitoring
-    const checkInterval = setInterval(() => {
-        if (!autoSmartActionsEnabled) {
-            clearInterval(checkInterval);
-            return;
+    let isMonitoring = false;
+    let monitoringTimeout = null;
+    
+    // Debounced detection function
+    const debouncedDetection = () => {
+        if (monitoringTimeout) {
+            clearTimeout(monitoringTimeout);
         }
         
-        detectNewAIResponse(platform);
-    }, 2000); // Check every 2 seconds
+        monitoringTimeout = setTimeout(() => {
+            if (!isMonitoring && autoSmartActionsEnabled) {
+                isMonitoring = true;
+                detectNewAIResponse(platform);
+                // Reset monitoring flag after processing
+                setTimeout(() => {
+                    isMonitoring = false;
+                }, 5000); // 5-second cooldown between detections
+            }
+        }, 1000); // 1-second debounce
+    };
     
-    // Also use mutation observer for immediate detection
+    // Use ONLY mutation observer (remove interval polling)
     const responseObserver = new MutationObserver((mutations) => {
-        if (!autoSmartActionsEnabled) return;
+        if (!autoSmartActionsEnabled || isMonitoring) return;
+        
+        let shouldCheck = false;
         
         mutations.forEach(mutation => {
             if (mutation.type === 'childList') {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === 1) { // Element node
                         if (looksLikeAIResponse(node, platform)) {
-                            setTimeout(() => detectNewAIResponse(platform), 1000);
+                            shouldCheck = true;
                         }
                     }
                 });
             }
         });
+        
+        if (shouldCheck) {
+            console.log('🔄 AI response mutation detected');
+            debouncedDetection();
+        }
     });
     
     responseObserver.observe(document.body, {
         childList: true,
         subtree: true
     });
+    
+    // Add backup interval check (much less frequent)
+    const backupInterval = setInterval(() => {
+        if (!autoSmartActionsEnabled || isMonitoring) {
+            return;
+        }
+        
+        // Only run backup check if no recent activity
+        const timeSinceLastAction = Date.now() - lastAIResponseTime;
+        if (timeSinceLastAction > 10000) { // 10 seconds since last action
+            debouncedDetection();
+        }
+    }, 15000); // Check every 15 seconds as backup
+    
+    // Store interval for cleanup
+    window.autoSmartActionsInterval = backupInterval;
 }
 
 function looksLikeAIResponse(node, platform) {
@@ -685,14 +720,20 @@ function looksLikeAIResponse(node, platform) {
 }
 
 function detectNewAIResponse(platform) {
-    if (isProcessingAutoAction) return;
+    // Immediate lock check
+    if (autoActionLock || isProcessingAutoAction) {
+        console.log('🔒 Detection blocked - already processing');
+        return;
+    }
     
     try {
         const now = Date.now();
-        if (now - lastAIResponseTime < AUTO_ACTION_COOLDOWN) return;
+        if (now - lastAIResponseTime < AUTO_ACTION_COOLDOWN) {
+            console.log(`⏱️ Cooldown active (${Math.floor((AUTO_ACTION_COOLDOWN - (now - lastAIResponseTime)) / 1000)}s remaining)`);
+            return;
+        }
         
         let latestResponse = null;
-        let responseTime = 0;
         
         // Platform-specific response detection
         switch(platform) {
@@ -714,17 +755,20 @@ function detectNewAIResponse(platform) {
         }
         
         if (latestResponse && latestResponse.text && latestResponse.text.length > 100) {
-            // Check if this is actually a new response
-            const responseHash = simpleHash(latestResponse.text.substring(0, 200));
-            const lastHash = localStorage.getItem('lastAIResponseHash');
+            // Create a unique fingerprint for this response
+            const responseFingerprint = createResponseFingerprint(latestResponse.text);
+            const lastFingerprint = localStorage.getItem('lastAutoActionFingerprint');
             
-            if (responseHash !== lastHash) {
+            // Only proceed if this is a genuinely new response
+            if (responseFingerprint !== lastFingerprint) {
                 console.log('🎯 New AI response detected, generating auto smart action...');
-                localStorage.setItem('lastAIResponseHash', responseHash);
+                localStorage.setItem('lastAutoActionFingerprint', responseFingerprint);
                 lastAIResponseTime = now;
                 
-                // Generate auto smart action
+                // Generate auto smart action (with immediate lock protection)
                 generateAutoSmartAction(platform);
+            } else {
+                console.log('🔄 Same response detected, skipping auto action generation');
             }
         }
         
@@ -733,12 +777,51 @@ function detectNewAIResponse(platform) {
     }
 }
 
+// Add this new function right after detectNewAIResponse
+function createResponseFingerprint(responseText) {
+    // Create a more robust fingerprint using first 300 chars + length + word count
+    const excerpt = responseText.trim().substring(0, 300);
+    const wordCount = responseText.split(/\s+/).length;
+    const textLength = responseText.length;
+    
+    // Combine multiple factors for uniqueness
+    const combinedString = `${excerpt}|${textLength}|${wordCount}`;
+    
+    // Create hash
+    let hash = 0;
+    for (let i = 0; i < combinedString.length; i++) {
+        const char = combinedString.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash.toString();
+}
+
 function detectChatGPTResponse() {
     const responses = document.querySelectorAll('[data-message-author-role="assistant"]');
     if (responses.length === 0) return null;
     
     const latest = responses[responses.length - 1];
+    
+    // Check if response is still being generated (streaming)
+    const isStreaming = latest.querySelector('.result-streaming') || 
+                       latest.querySelector('[data-testid*="streaming"]') ||
+                       latest.closest('[data-streaming="true"]') ||
+                       latest.querySelector('.animate-pulse') ||
+                       document.querySelector('[data-testid="stop-button"]'); // Stop button visible = still generating
+    
+    if (isStreaming) {
+        console.log('⏳ ChatGPT still streaming, waiting...');
+        return null; // Don't process while streaming
+    }
+    
     const text = latest.textContent || latest.innerText || '';
+    
+    // Only process substantial, complete responses
+    if (text.length < 200) {
+        console.log('📏 Response too short, likely incomplete');
+        return null;
+    }
     
     return {
         text: text.trim(),
@@ -757,7 +840,25 @@ function detectClaudeResponse() {
     if (aiResponses.length === 0) return null;
     
     const latest = aiResponses[aiResponses.length - 1];
+    
+    // Check if Claude is still thinking/responding
+    const isThinking = document.querySelector('[data-testid*="thinking"]') ||
+                      document.querySelector('.animate-pulse') ||
+                      document.querySelector('[aria-label*="thinking"]') ||
+                      latest.querySelector('.animate-pulse');
+    
+    if (isThinking) {
+        console.log('💭 Claude still thinking, waiting...');
+        return null;
+    }
+    
     const text = latest.textContent || latest.innerText || '';
+    
+    // Only process substantial responses
+    if (text.length < 200) {
+        console.log('📏 Claude response too short, likely incomplete');
+        return null;
+    }
     
     return {
         text: text.trim(),
@@ -776,7 +877,25 @@ function detectGeminiResponse() {
     if (validResponses.length === 0) return null;
     
     const latest = validResponses[validResponses.length - 1];
+    
+    // Check if Gemini is still generating
+    const isGenerating = document.querySelector('[aria-label*="generating"]') ||
+                        document.querySelector('.animate-pulse') ||
+                        latest.querySelector('.animate-pulse') ||
+                        document.querySelector('[data-testid*="generating"]');
+    
+    if (isGenerating) {
+        console.log('🤖 Gemini still generating, waiting...');
+        return null;
+    }
+    
     const text = latest.textContent || latest.innerText || '';
+    
+    // Only process complete responses
+    if (text.length < 200) {
+        console.log('📏 Gemini response too short, likely incomplete');
+        return null;
+    }
     
     return {
         text: text.trim(),
@@ -822,12 +941,19 @@ function simpleHash(str) {
 }
 
 async function generateAutoSmartAction(platform) {
-    if (isProcessingAutoAction) return;
+    // Immediate synchronous lock check
+    if (autoActionLock || isProcessingAutoAction) {
+        console.log('🔒 Auto action blocked by immediate lock');
+        return;
+    }
+    
+    // Set immediate lock
+    autoActionLock = true;
     isProcessingAutoAction = true;
     
+    console.log('🚀 Generating auto smart action...');
+    
     try {
-        console.log('🚀 Generating auto smart action...');
-        
         // Extract conversation for context
         const conversation = extractConversation();
         if (!conversation || conversation === 'Unable to extract conversation from this page.') {
@@ -862,7 +988,10 @@ async function generateAutoSmartAction(platform) {
     } catch (error) {
         console.error('❌ Auto smart action generation error:', error);
     } finally {
+        // Reset flags
         isProcessingAutoAction = false;
+        autoActionLock = false;
+        console.log('🔓 Auto action processing complete');
     }
 }
 
